@@ -117,8 +117,21 @@ void write_data(struct ftdi_context *ftdi, unsigned char data, bool verbose) {
     }
 }
 
+char* hex_to_8bit(unsigned char hex) {
+    char *binary = malloc(sizeof(char) * 9);
+
+    for (int i = 0; i < 8; i++) {
+        binary[i] = (hex & (1 << (7 - i))) ? '1' : '0';
+    }
+
+    binary[8] = '\0';
+    return binary;
+
+}
+
 void toggle_bits(struct ftdi_context *ftdi, bool verbose) {
     unsigned char buf;
+    char *eightbits;
     for (int i = 0; i < 32; i++) {
         buf = 1 << (i % 8);
 
@@ -126,7 +139,8 @@ void toggle_bits(struct ftdi_context *ftdi, bool verbose) {
             if (i > 0 && (i % 8) == 0)
                 printf("\n");
 
-            printf("%02hhx ", buf);
+            eightbits = hex_to_8bit(buf);
+            printf("0b%s ", eightbits);
         }
 
         fflush(stdout);
