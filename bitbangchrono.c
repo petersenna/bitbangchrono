@@ -5,12 +5,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <getopt.h>
+
 #include <ftdi.h>
 
 #define USB_VENDOR_ID 0x0403
 #define USB_PRODUCT_ID 0x6001
 
 // Function declarations
+void display_help(void);
+void parse_arguments(int argc, char **argv, bool *verbose);
 int initialize_ftdi(struct ftdi_context **ftdi, int vendor, int product, bool verbose);
 void set_bitbang_mode(struct ftdi_context *ftdi, bool verbose);
 void write_data(struct ftdi_context *ftdi, unsigned char data, bool verbose);
@@ -22,6 +26,8 @@ int main(int argc, char **argv) {
     int retval;
 
     bool verbose = false;
+
+    parse_arguments(argc, argv, &verbose);
 
     retval = initialize_ftdi(&ftdi, USB_VENDOR_ID, USB_PRODUCT_ID, verbose);
     if (retval != 0)
@@ -35,6 +41,38 @@ int main(int argc, char **argv) {
     cleanup(ftdi, verbose);
 
     return EXIT_SUCCESS;
+}
+
+void display_help(void) {
+    printf("\nValid options are:\n");
+    printf("  -v, --verbose\tEnable verbose output\n");
+    printf("  -h, --help\tDisplay this help and exit\n");
+    printf("\n");
+}
+
+void parse_arguments(int argc, char **argv, bool *verbose) {
+    static struct option long_options[] = {
+        {"verbose", no_argument, 0, 'v'},
+        {"help", no_argument, 0, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    int option_index = 0;
+    int c;
+
+    while ((c = getopt_long(argc, argv, "vh", long_options, &option_index)) != -1) {
+        switch (c) {
+            case 'v':
+                *verbose = true;
+                break;
+            case 'h':
+                display_help();
+                exit(EXIT_SUCCESS);
+            default:
+                display_help();
+                exit(EXIT_FAILURE);
+        }
+    }
 }
 
 int initialize_ftdi(struct ftdi_context **ftdi, int vendor, int product, bool verbose) {
