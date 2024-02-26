@@ -2,6 +2,7 @@
 /* From: https://github.com/legege/libftdi/blob/master/examples/bitbang.c */
 
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
@@ -166,21 +167,24 @@ void write_data(unsigned char data) {
     }
 }
 
-char* hex_to_8bit(unsigned char hex) {
-    char *binary = malloc(sizeof(char) * 9);
+int hex_to_8bit(const unsigned char hex, char *eightbits) {
 
-    for (int i = 0; i < 8; i++) {
-        binary[i] = (hex & (1 << (7 - i))) ? '1' : '0';
+    if (eightbits == NULL) {
+        if (app_context->verbose)
+            fprintf(stderr, "binary is NULL\n");
+        return 1;
     }
 
-    binary[8] = '\0';
-    return binary;
+    for (int i = 0; i < 8; i++) {
+        eightbits[i] = (hex & (1 << (7 - i))) ? '1' : '0';
+    }
 
+    return 0;
 }
 
 void toggle_bits() {
     unsigned char buf;
-    char *eightbits;
+    char eightbits[9] = {0,0,0,0,0,0,0,0,'\0'};
 
     if (app_context == NULL) {
         fprintf(stderr, "app_context is NULL\n");
@@ -194,8 +198,8 @@ void toggle_bits() {
             if (i > 0 && (i % 8) == 0)
                 printf("\n");
 
-            eightbits = hex_to_8bit(buf);
-            printf("0b%s ", eightbits);
+            if((hex_to_8bit(buf, eightbits)) == 0)
+                printf("0b%s ", eightbits);
         }
 
         fflush(stdout);
