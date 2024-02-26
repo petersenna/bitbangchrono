@@ -1,5 +1,19 @@
-/* This program is distributed under the GPL, version 2 */
-/* From: https://github.com/legege/libftdi/blob/master/examples/bitbang.c */
+/*
+
+SPDX-License-Identifier: GPL-2.0-only
+
+    Based on: https://github.com/legege/libftdi/blob/master/examples/bitbang.c
+
+    These are the mappings for my FT232RL board (red board with 3.3V/5V jumper):
+        1 -> TX
+        2 -> RX
+        3 -> RTS
+        4 -> CTS
+        5 -> DTR
+        6 -> RSD
+        7 -> DCD
+        8 -> RI
+ */
 
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +31,7 @@
 typedef struct {
     struct ftdi_context *ftdi;
     bool verbose;
+    unsigned char blink_bit;
 } app_context_t;
 
 app_context_t *app_context = NULL;
@@ -28,6 +43,9 @@ void parse_arguments(int argc, char **argv);
 int initialize_ftdi(int vendor, int product);
 void set_bitbang_mode();
 void write_data(unsigned char data);
+int get_user_input();
+void blink_bit();
+void activate_bit(unsigned char bit);
 void toggle_bits();
 void cleanup();
 
@@ -37,13 +55,14 @@ int main(int argc, char **argv) {
     app_context_t local_app_context;
     local_app_context.ftdi = NULL;
     local_app_context.verbose = false;
+    local_app_context.blink_bit = 0;
 
     // Set the global pointer for signal handling
     app_context = &local_app_context;
 
-    signal(SIGINT, signal_handler);
-
     parse_arguments(argc, argv);
+
+    signal(SIGINT, signal_handler);
 
     retval = initialize_ftdi(USB_VENDOR_ID, USB_PRODUCT_ID);
     if (retval != 0){
@@ -54,7 +73,10 @@ int main(int argc, char **argv) {
     set_bitbang_mode();
     write_data(0x00);
 
-    toggle_bits();
+    if (app_context->blink_bit != 0)
+       blink_bit();
+    else
+        toggle_bits();
 
     cleanup();
 
@@ -74,6 +96,9 @@ void display_help(void) {
     printf("\nValid options are:\n");
     printf("  -v, --verbose\tEnable verbose output\n");
     printf("  -h, --help\tDisplay this help and exit\n");
+    printf("  -b, --blink\tPass a number between 1 and 8 to blink that address.\n");
+    printf("\t\t1 -> 0x01, 2 -> 0x02, 3 -> 0x04, 4 -> 0x08\n");
+    printf("\t\t5 -> 0x10, 6 -> 0x20, 7 -> 0x40, 8 -> 0x80\n");
     printf("\n");
 }
 
@@ -87,13 +112,14 @@ void parse_arguments(int argc, char **argv) {
     static struct option long_options[] = {
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
+        {"blink", required_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int option_index = 0;
     int c;
 
-    while ((c = getopt_long(argc, argv, "vh", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "vhb:", long_options, &option_index)) != -1) {
         switch (c) {
             case 'v':
                 app_context->verbose = true;
@@ -101,6 +127,16 @@ void parse_arguments(int argc, char **argv) {
             case 'h':
                 display_help();
                 exit(EXIT_SUCCESS);
+            case 'b':
+                unsigned char bit;
+                if ((sscanf(optarg, "%d", &bit) != 1) ||
+                    (bit < 1) ||
+                    (bit > 8)) {
+                    fprintf(stderr, "Invalid input...\n");
+                    exit(EXIT_FAILURE);
+                }
+                app_context->blink_bit = bit;
+                break;
             default:
                 display_help();
                 exit(EXIT_FAILURE);
@@ -163,8 +199,15 @@ void write_data(unsigned char data) {
         fprintf(stderr, "write failed for 0x%x, error %d (%s)\n", data, f, ftdi_get_error_string(app_context->ftdi));
     } else {
         if (app_context->verbose)
-            printf("Data 0x%02x written successfully\n", data);
+            printf("0x%02x written successfully\n", data);
     }
+}
+
+int get_user_input() {
+    int bit;
+    printf("Enter a bit (1-8) or 0 to exit: ");
+    scanf("%d", &bit);
+    return bit;
 }
 
 int hex_to_8bit(const unsigned char hex, char *eightbits) {
@@ -182,8 +225,23 @@ int hex_to_8bit(const unsigned char hex, char *eightbits) {
     return 0;
 }
 
+void blink_bit() {
+    int bit = app_context->blink_bit;
+
+    while(true) {
+        unsigned char hex = 1 << (bit - 1);
+
+        while (true) {
+            write_data(hex);
+            sleep(1);
+            write_data(0x00);
+            sleep(1);
+        }
+    }
+}
+
 void toggle_bits() {
-    unsigned char buf;
+    unsigned char buf, idx;
     char eightbits[9] = {0,0,0,0,0,0,0,0,'\0'};
 
     if (app_context == NULL) {
@@ -199,7 +257,8 @@ void toggle_bits() {
                 printf("\n");
 
             if((hex_to_8bit(buf, eightbits)) == 0)
-                printf("0b%s ", eightbits);
+                idx = (i%8) + 1;
+                fprintf(stdout, "%d: 0b%s ", idx, eightbits);
         }
 
         fflush(stdout);
