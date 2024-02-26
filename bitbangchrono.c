@@ -1,6 +1,7 @@
 /*
 
 SPDX-License-Identifier: GPL-2.0-only
+2024 (c) Peter Senna Tschudin <peter.senna@gmail.com>
 
     Based on: https://github.com/legege/libftdi/blob/master/examples/bitbang.c
 
@@ -22,16 +23,32 @@ SPDX-License-Identifier: GPL-2.0-only
 #include <signal.h>
 #include <stdbool.h>
 #include <getopt.h>
-
+#include <pthread.h>
 #include <ftdi.h>
 
-#define USB_VENDOR_ID 0x0403
-#define USB_PRODUCT_ID 0x6001
+#define USB_VENDOR_ID   0x0403
+#define USB_PRODUCT_ID  0x6001
+
+#define FDTI_TXD_PIN    0x01
+#define FDTI_RXD_PIN    0x02
+#define FDTI_RTS_PIN    0x04
+#define FDTI_CTS_PIN    0x08
+#define FDTI_DTR_PIN    0x10
+#define FDTI_RSD_PIN    0x20
+#define FDTI_DCD_PIN    0x40
+#define FDTI_RI_PIN     0x80
+
+#define FTDI_OUT_PINS   (FDTI_TXD_PIN | FDTI_RTS_PIN | FDTI_DTR_PIN)
+#define FTDI_IN_PINS    (FDTI_RXD_PIN | FDTI_CTS_PIN | FDTI_RSD_PIN | FDTI_DCD_PIN | FDTI_RI_PIN)
+
+#define FTDI_LOOPBACK_WRITE  FDTI_DTR_PIN
+#define FTDI_LOOPBACK_READ   FDTI_RI_PIN
 
 typedef struct {
     struct ftdi_context *ftdi;
     bool verbose;
     unsigned char blink_bit;
+    int ping_count;
 } app_context_t;
 
 app_context_t *app_context = NULL;
@@ -45,9 +62,10 @@ void set_bitbang_mode();
 void write_data(unsigned char data);
 int get_user_input();
 void blink_bit();
-void activate_bit(unsigned char bit);
+long loopback_ping();
 void toggle_bits();
 void cleanup();
+void ping(int count);
 
 int main(int argc, char **argv) {
     int retval;
@@ -56,11 +74,10 @@ int main(int argc, char **argv) {
     local_app_context.ftdi = NULL;
     local_app_context.verbose = false;
     local_app_context.blink_bit = 0;
+    local_app_context.ping_count = 0;
 
     // Set the global pointer for signal handling
     app_context = &local_app_context;
-
-    parse_arguments(argc, argv);
 
     signal(SIGINT, signal_handler);
 
@@ -73,10 +90,7 @@ int main(int argc, char **argv) {
     set_bitbang_mode();
     write_data(0x00);
 
-    if (app_context->blink_bit != 0)
-       blink_bit();
-    else
-        toggle_bits();
+    parse_arguments(argc, argv);
 
     cleanup();
 
@@ -112,14 +126,16 @@ void parse_arguments(int argc, char **argv) {
     static struct option long_options[] = {
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
-        {"blink", required_argument, 0, 'h'},
+        {"blink", required_argument, 0, 'b'},
+        {"ping", required_argument, 0, 'p'},
         {0, 0, 0, 0}
     };
 
     int option_index = 0;
     int c;
+    int i = 0;
 
-    while ((c = getopt_long(argc, argv, "vhb:", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "vhp:b:", long_options, &option_index)) != -1) {
         switch (c) {
             case 'v':
                 app_context->verbose = true;
@@ -129,6 +145,7 @@ void parse_arguments(int argc, char **argv) {
                 exit(EXIT_SUCCESS);
             case 'b':
                 unsigned char bit;
+                i++;
                 if ((sscanf(optarg, "%d", &bit) != 1) ||
                     (bit < 1) ||
                     (bit > 8)) {
@@ -136,12 +153,20 @@ void parse_arguments(int argc, char **argv) {
                     exit(EXIT_FAILURE);
                 }
                 app_context->blink_bit = bit;
+                blink_bit();
+                break;
+            case 'p':
+                i++;
+                ping(atoi(optarg));
                 break;
             default:
                 display_help();
                 exit(EXIT_FAILURE);
         }
     }
+    if (i == 0)
+        toggle_bits();
+
 }
 
 int initialize_ftdi(int vendor, int product) {
@@ -182,7 +207,8 @@ void set_bitbang_mode() {
     if (app_context->verbose)
         printf("enabling bitbang mode\n");
 
-    ftdi_set_bitmode(app_context->ftdi, 0xFF, BITMODE_BITBANG);
+    ftdi_set_bitmode(app_context->ftdi, 0xFF, BITMODE_RESET);
+    ftdi_set_bitmode(app_context->ftdi, FTDI_OUT_PINS, BITMODE_BITBANG);
 }
 
 void write_data(unsigned char data) {
@@ -238,6 +264,125 @@ void blink_bit() {
             sleep(1);
         }
     }
+}
+
+long micros() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+void *read_loopback_thread(void *arg) {
+    unsigned char read_buffer[1];
+
+    while (true){
+        int f = ftdi_read_pins(app_context->ftdi, &read_buffer[0]);
+        if (f == 0) {
+            if (read_buffer[0] & FTDI_LOOPBACK_READ)
+                break;
+        }
+    }
+
+    return NULL;
+}
+
+void *write_loopback_thread(void *arg) {
+    unsigned char hex = FTDI_LOOPBACK_WRITE;
+    write_data(hex);
+
+    return NULL;
+}
+
+/*
+loopback_ping(bytes_to_send) As with the network ping program, this function
+compuites the time it takes to send a few bytes to the device and to read
+them back using the LOOPBACK_WRITE and LOOPBACK_READ pins that are hardwired.
+It returns a long with the number of microseconds it took to send and receive
+the data.
+
+The default value for bytes_to_send is 64, and the function should create
+a buffer of that size, fill it with random data, send it to the device, and
+then read it back, making sure the value read was correct. The function
+should then return the time it took to do this in microseconds.
+*/
+long loopback_ping() {
+    pthread_t read_tid, write_tid;
+    long start, end;
+
+    if (app_context == NULL) {
+        fprintf(stderr, "app_context is NULL\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Flush everything
+    ftdi_tcioflush(app_context->ftdi);
+    write_data(0x00);
+
+    // Start read thread
+    if (pthread_create(&read_tid, NULL, read_loopback_thread, NULL) != 0) {
+        fprintf(stderr, "Failed to create read thread\n");
+        return -1;
+    }
+
+    start = micros();
+    // Start write thread
+    if (pthread_create(&write_tid, NULL, write_loopback_thread, NULL) != 0) {
+        fprintf(stderr, "Failed to create write thread\n");
+        return -1;
+    }
+
+    pthread_join(read_tid, NULL);
+    pthread_join(write_tid, NULL);
+    end = micros();
+
+    return end - start;
+}
+/*
+Receives an int as argument and calls loopback_ping that many times
+Produce ping-like statistics
+4 bits, time 3005ys
+rtt min/avg/max/mdev = 3.384/3.794/4.411/0.394 ys
+*/
+void ping(int count) {
+    long times[count];
+    long min, max, avg, sum, start, end;
+    float kbps, ms;
+
+    if (app_context == NULL) {
+        fprintf(stderr, "app_context is NULL\n");
+        exit(EXIT_FAILURE);
+    }
+
+    start = micros();
+
+    for (int i = 0; i < count; i++) {
+        times[i] = loopback_ping(64);
+    }
+
+    min = times[0];
+    max = times[0];
+    sum = 0;
+
+    for (int i = 0; i < count; i++) {
+        if (times[i] < min)
+            min = times[i];
+        if (times[i] > max)
+            max = times[i];
+        sum += times[i];
+    }
+
+    avg = sum / count;
+
+    end = micros();
+
+    count = count * 2; // One for set and one for reset
+    ms = (end - start) / 1000;
+
+    kbps = count / ms;
+    
+    fprintf(stdout, "%d bits, time %0.fms\n", count, ms);
+    fprintf(stdout, "kbps: %.3f\n", kbps);
+    fprintf(stdout, "rtt min/avg/max/mdev = %ld/%ld/%ld/%ld us\n", min, avg, max, max - min);
 }
 
 void toggle_bits() {
