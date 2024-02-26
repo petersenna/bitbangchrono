@@ -62,11 +62,12 @@ int main(int argc, char **argv) {
 }
 
 void signal_handler(int signum) {
-   printf("\nCaught signal %d, cleaning up...\n", signum);
+    if ((app_context != NULL) && (app_context->verbose))
+        printf("\nCaught signal %d, cleaning up...\n", signum);
 
-   cleanup();
+    cleanup();
 
-   exit(signum);
+    exit(signum);
 }
 
 void display_help(void) {
@@ -215,12 +216,11 @@ void cleanup() {
     if (app_context == NULL)
         return;
 
-    if (app_context->verbose)
-        printf("disabling bitbang mode\n");
-
     ftdi_disable_bitbang(app_context->ftdi);
     ftdi_usb_close(app_context->ftdi);
     ftdi_free(app_context->ftdi);
 
     app_context->ftdi = NULL;
+
+    fprintf(stderr, "\n");
 }
