@@ -127,7 +127,6 @@ int initialize_ftdi(int vendor, int product) {
     if (f < 0 && f != -5) {
         if (app_context->verbose)
             fprintf(stderr, "unable to open ftdi device: %d (%s)\n", f, ftdi_get_error_string(app_context->ftdi));
-        cleanup();
         return 1;
     }
 
