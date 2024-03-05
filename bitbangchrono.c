@@ -207,7 +207,7 @@ int initialize_ftdi(int vendor, int product) {
         return 1;
     }
 
-    ftdi_set_baudrate(app_context->ftdi, 19200);
+    ftdi_set_baudrate(app_context->ftdi, 38400);
 
     if (app_context->verbose)
         printf("ftdi open succeeded: %d\n", f);
@@ -428,11 +428,16 @@ void flip_flop(long max_count) {
         exit(EXIT_FAILURE);
     }
 
+    // Flush everything
+    ftdi_tcioflush(app_context->ftdi);
+    write_data(ALL_ZEROS);
+
     start = micros();
     while (true){
         if (counter >= max_count)
             break;
         s0 = micros();
+
         int f = ftdi_read_pins(app_context->ftdi, &read_buffer[0]);
         if (f == 0) {
             bit = read_buffer[0] & FTDI_LOOPBACK_READ;
