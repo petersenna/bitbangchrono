@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = $(shell pkg-config --cflags libftdi1)
+CFLAGS = $(shell pkg-config --cflags libftdi1) -g
 LDFLAGS = $(shell pkg-config --libs libftdi1)
 
 # Name of your executable
